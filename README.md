@@ -97,3 +97,161 @@ As an example, you can check disk usage on all servers with:
 ![Ad-Hoc Command Output](/images/kb1.png)
 
 ## Creating and Running Ansible Playbooks
+
+Three Ansible playbooks were created in this repository described as below:
+
+**1.** first playbook named **“CPHALO_Update_Service-Running_Playbook.yml”** 
+executes the following tasks:
+- ensure cphalo is at the latest version for RHEL host
+- ensure cphalo is at the latest version for Ubuntu host
+- ensure cphalo service is running on both RHEL and Ubuntu hosts
+
+```
+---
+  - name: CPHALO_Update_service-Running_Playbook
+    hosts: all
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    tasks:
+      - name: ensure cphalo is at the latest version for RHEL host
+        when: "'redhat_group' in group_names"
+        yum:
+          name: cphalo
+          state: latest
+      - name: ensure cphalo is at the latest version for Ubuntu host
+        when: "'ubuntu_group' in group_names"
+        apt:
+          update_cache: yes
+          name: cphalo
+          state: latest
+      - name: ensure cphalo service is running on both RHEL and Ubuntu hosts
+        service:
+          name: cphalod
+          state: started
+```
+
+**2.** The second playbook named **“List_HALO_Group_SVA_Issues_Playbook.yml”** 
+executes the following tasks:
+- encode **api_key_id** and **api_key_secret** using **base64** encoding method and generate **access token**.
+- filter and retrieve only **SVA** issues for the provided **Halo Group**.
+- export retrieved **SVA** issues response into the **log file** "sva-issues-response.txt".
+
+```
+---
+  - name: List_HALO_Group_SVA_Issues_Playbook
+    hosts: all
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    
+    vars:
+      api_key_id: "<halo_account_api_key_id>"
+      api_key_secret: "<halo_account_api_key_secret>"
+      api_key_id_secret_str: "{{api_key_id}}:{{api_key_secret}}"
+      halo_group_id: "<halo_group_id>"
+      issue_type: "sva"
+      api_authentication_url: "https://api.cloudpassage.com/oauth/access_token?grant_type=client_credentials"
+      api_svaissues_url: "https://api.cloudpassage.com/v3/issues?group_id={{halo_group_id}}&type={{issue_type}}"
+    
+    tasks:
+      - name: encode api_key_id and api_key_secret using base64 encoding method
+        shell: echo {{ api_key_id_secret_str | b64encode }}
+        register: echo_content
+          
+      - name: generate access token
+        uri:
+          url: "{{api_authentication_url}}"
+          method: POST
+          headers:
+            Authorization: "Basic {{echo_content.stdout}}"
+        register: access_token_response
+          
+      - name: list halo group sva issues
+        uri:
+          url: "{{api_svaissues_url}}"
+          method: GET
+          headers:
+            Authorization: "Bearer {{access_token_response.json.access_token}}"
+            Content-Type: "application/json"
+        register: sva_issues_response
+        
+      - name: export retreived sva issues response into the log file
+        shell: echo {{ sva_issues_response }} > /home/ec2-user/sva-issues-response.txt
+```
+
+**3.** The third Ansible Playbook named **“Patch_HALO-Group_SVA_Issues_Playbook.yml”** 
+used to Patch all SVA findings. 
+it fixes all the reported SVA findings of specific server 
+in a specific HALO group by executing the following tasks:
+
+- encode **api_key_id** and **api_key_secret** using **base64** encoding method amd generate **access token**. 
+- retrieve and export all **HALO group** **SVA** issues into a **log** file.
+- save **packages names** that throws the **SVA** issues into Ansible **List of items**.
+- loop on all the **list items** of the SVA findings and apply **update fix**.
+- reboot ansible hosts to apply the **update fix**.
+
+```
+---
+  - name: Patch_HALO-Group_SVA_Issues_Playbook
+    hosts: all
+    gather_facts: yes
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    
+    vars:
+      api_key_id: "<halo_account_api_key_id>"
+      api_key_secret: "<halo_account_api_key_secret>"
+      api_key_id_secret_str: "{{api_key_id}}:{{api_key_secret}}"
+      halo_group_id: "<halo_group_id>"
+      issue_type: "sva"
+      api_authentication_url: "https://api.cloudpassage.com/oauth/access_token?grant_type=client_credentials"
+      api_halogroupsvaissues_url: "https://api.cloudpassage.com/v3/issues?group_id={{halo_group_id}}&type={{issue_type}}"
+    
+    tasks:
+      - name: encode api_key_id and api_key_secret using base64 encoding method
+        shell: echo {{ api_key_id_secret_str | b64encode }}
+        register: echo_content
+          
+      - name: generate access token
+        uri:
+          url: "{{api_authentication_url}}"
+          method: POST
+          headers:
+            Authorization: "Basic {{echo_content.stdout}}"
+        register: access_token_response
+          
+      - name: list halo group sva issues
+        uri:
+          url: "{{api_halogroupsvaissues_url}}"
+          method: GET
+          headers:
+            Authorization: "Bearer {{access_token_response.json.access_token}}"
+            Content-Type: "application/json"
+        register: halo_group_sva_issues_response
+        
+      - name: export retreived sva issues response into the log file
+        shell: echo  {{ item.package_name }} >> /home/ec2-user/issues.txt
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"
+        
+      - name: fix all sva findings for .rpm servers
+        when: "'redhat_group' in group_names"
+        yum:
+          update_cache: yes
+          name: "{{ item.package_name }}"
+          state: latest
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"
+          
+      - name: fix all sva findings for .deb servers
+        when: "'ubuntu_group' in group_names"
+        apt:
+          update_cache: yes
+          name: "{{ item.package_name }}"
+          state: latest
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"       
+          
+      - name: restart system to reboot to newest kernel
+        reboot:
+          reboot_timeout: 3600
+```
