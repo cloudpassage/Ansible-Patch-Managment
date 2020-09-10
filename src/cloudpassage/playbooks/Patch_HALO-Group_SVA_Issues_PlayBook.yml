@@ -1,0 +1,65 @@
+---
+  - name: Patch_HALO-Group_SVA_Issues_Playbook
+    hosts: all
+    gather_facts: yes
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    
+    vars:
+      api_key_id: "<halo_account_api_key_id>"
+      api_key_secret: "<halo_account_api_key_secret>"
+      api_key_id_secret_str: "{{api_key_id}}:{{api_key_secret}}"
+      halo_group_id: "<halo_group_id>"
+      issue_type: "sva"
+      api_authentication_url: "https://api.cloudpassage.com/oauth/access_token?grant_type=client_credentials"
+      api_halogroupsvaissues_url: "https://api.cloudpassage.com/v3/issues?group_id={{halo_group_id}}&type={{issue_type}}"
+    
+    tasks:
+      - name: encode api_key_id and api_key_secret using base64 encoding method
+        shell: echo {{ api_key_id_secret_str | b64encode }}
+        register: echo_content
+          
+      - name: generate access token
+        uri:
+          url: "{{api_authentication_url}}"
+          method: POST
+          headers:
+            Authorization: "Basic {{echo_content.stdout}}"
+        register: access_token_response
+          
+      - name: list halo group sva issues
+        uri:
+          url: "{{api_halogroupsvaissues_url}}"
+          method: GET
+          headers:
+            Authorization: "Bearer {{access_token_response.json.access_token}}"
+            Content-Type: "application/json"
+        register: halo_group_sva_issues_response
+        
+      - name: export retreived sva issues response into the log file
+        shell: echo  {{ item.package_name }} >> /home/ec2-user/issues.txt
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"
+        
+      - name: fix all sva findings for .rpm servers
+        when: "'redhat_group' in group_names"
+        yum:
+          update_cache: yes
+          name: "{{ item.package_name }}"
+          state: latest
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"
+          
+      - name: fix all sva findings for .deb servers
+        when: "'ubuntu_group' in group_names"
+        apt:
+          update_cache: yes
+          name: "{{ item.package_name }}"
+          state: latest
+        with_items: "{{halo_group_sva_issues_response.json.issues}}"       
+          
+      - name: restart system to reboot to newest kernel
+        reboot:
+          reboot_timeout: 3600
+          
+      
+            

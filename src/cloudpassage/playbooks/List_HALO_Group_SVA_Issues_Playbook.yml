@@ -1,0 +1,43 @@
+---
+  - name: List_HALO_Group_SVA_Issues_Playbook
+    hosts: all
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    
+    vars:
+      api_key_id: "<halo_account_api_key_id>"
+      api_key_secret: "<halo_account_api_key_secret>"
+      api_key_id_secret_str: "{{api_key_id}}:{{api_key_secret}}"
+      halo_group_id: "<halo_group_id>"
+      issue_type: "sva"
+      api_authentication_url: "https://api.cloudpassage.com/oauth/access_token?grant_type=client_credentials"
+      api_svaissues_url: "https://api.cloudpassage.com/v3/issues?group_id={{halo_group_id}}&type={{issue_type}}"
+    
+    tasks:
+      - name: encode api_key_id and api_key_secret using base64 encoding method
+        shell: echo {{ api_key_id_secret_str | b64encode }}
+        register: echo_content
+          
+      - name: generate access token
+        uri:
+          url: "{{api_authentication_url}}"
+          method: POST
+          headers:
+            Authorization: "Basic {{echo_content.stdout}}"
+        register: access_token_response
+          
+      - name: list halo group sva issues
+        uri:
+          url: "{{api_svaissues_url}}"
+          method: GET
+          headers:
+            Authorization: "Bearer {{access_token_response.json.access_token}}"
+            Content-Type: "application/json"
+        register: sva_issues_response
+        
+      - name: export retreived sva issues response into the log file
+        shell: echo {{ sva_issues_response }} > /home/ec2-user/sva-issues-response.txt
+          
+      
+            

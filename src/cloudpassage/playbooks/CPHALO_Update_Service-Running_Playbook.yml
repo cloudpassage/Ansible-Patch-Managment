@@ -1,0 +1,26 @@
+---
+  - name: CPHALO_Update_service-Running_Playbook
+    hosts: all
+    become: yes
+    become_user: "<username>"
+    become_method: sudo
+    tasks:
+      - name: ensure cphalo is at the latest version for RHEL host
+        when: "'redhat_group' in group_names"
+        yum:
+          name: cphalo
+          state: latest
+      - name: ensure cphalo is at the latest version for Ubuntu host
+        when: "'ubuntu_group' in group_names"
+        apt:
+          update_cache: yes
+          name: cphalo
+          state: latest
+      - name: ensure cphalo service is running on both RHEL and Ubuntu hosts
+        service:
+          name: cphalod
+          state: started
+
+
+
+
